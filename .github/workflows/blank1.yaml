@@ -1,0 +1,68 @@
+name: CI - Java + Maven
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Compilar y probar
+        run: mvn clean verify
+
+      - name: Reporte de cobertura con JaCoCo
+        run: mvn jacoco:report
+
+  sonar:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: SonarCloud Analysis
+        uses: sonarsource/sonarcloud-github-action@master
+        with:
+          projectKey: 'mi-proyecto'
+          organization: 'mi-organizacion'
+          token: ${{ secrets.SONAR_TOKEN }}
+      - name: Ejecutar Sonar
+        run: mvn sonar:sonar \
+          -Dsonar.projectKey=mi-proyecto \
+          -Dsonar.organization=mi-organizacion \
+          -Dsonar.host.url=https://sonarcloud.io \
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+  deploy:
+    name: Despliegue
+    runs-on: ubuntu-latest
+    needs: [build, sonar]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker Build + Push
+        run: |
+          docker build -t mi-app:latest .
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          docker tag mi-app:latest docker.io/usuario/mi-app:latest
+          docker push docker.io/usuario/mi-app:latest
+
