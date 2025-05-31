@@ -1,36 +1,134 @@
-# This is a basic workflow to help you get started with Actions
+# .github/workflows/ci-pipeline.yml
+name: CI Pipeline
 
-name: CI
-
-# Controls when the workflow will run
+# 1. Definir cuándo se ejecuta (por ejemplo, en push o PR a main)
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+# 2. Posibles variables de entorno globales (opcional)
+env:
+  NODE_ENV: test
+  PYTHON_VERSION: '3.9'
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  # Job 1: Verificar Formato de Código (Linting)
+  lint:
+    name: Linting del código
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout repositorio
+        uses: actions/checkout@v3
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Instalar dependencias (por ejemplo, para Node.js)
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          npm install
+
+      - name: Ejecutar ESLint
+        run: |
+          npx eslint ./src
+        # Si ESLint retorna código distinto de 0, GitHub Actions marca el job como FAIL
+
+  # Job 2: Compilación / Build
+  build:
+    name: Compilación del proyecto
+    runs-on: ubuntu-latest
+    needs: lint           # Se ejecuta sólo si 'lint' pasó OK
+
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v3
+
+      - name: Instalar JDK (ejemplo: Java 11)
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+
+      - name: Ejecutar build con Maven
+        run: mvn clean install -DskipTests
+
+  # Job 3: Pruebas unitarias y cobertura
+  test:
+    name: Ejecutar pruebas unitarias y calcular cobertura
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v3
+
+      - name: Configurar Python (si es proyecto Python) o Node
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Instalar dependencias (para Python en ejemplo)
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Ejecutar pytest con cobertura
+        run: |
+          pytest --cov=mi_paquete --cov-report=xml
+
+      - name: Analizar cobertura mínima (por ejemplo, 80 %)
+        run: |
+          COVERAGE=$(grep '<coverage line-rate' coverage.xml | sed -E 's/.*line-rate="([0-9.]+)".*/\1/')
+          # Convertir a porcentaje
+          PERCENTAGE=$(echo "$COVERAGE * 100" | bc)
+          echo "Cobertura calculada: $PERCENTAGE %"
+          if (( $(echo "$PERCENTAGE < 80.0" | bc -l) )); then
+            echo "ERROR: La cobertura es menor a 80%"
+            exit 1
+          fi
+
+  # Job 4: Análisis de vulnerabilidades estático con SonarCloud
+  sonar:
+    name: Análisis en SonarCloud
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v3
+
+      - name: Configurar SonarCloud
+        uses: sonarsource/sonarcloud-github-action@master
+        with:
+          projectKey: 'mi-organizacion_mi-proyecto'
+          organization: 'mi-organizacion'
+          token: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Ejecutar análisis
+        run: mvn sonar:sonar \
+          -Dsonar.projectKey=mi-proyecto \
+          -Dsonar.host.url=https://sonarcloud.io \
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+
+  # Job 5: Despliegue (opcional). Sólo si pass en todos los anteriores
+  deploy:
+    name: Despliegue a staging
+    runs-on: ubuntu-latest
+    needs: [lint, build, test, sonar]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configurar Docker (si es necesario)
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        run: |
+          docker build -t mi-app:staging .
+
+      - name: Push a Docker Registry
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          docker tag mi-app:staging registry.hub.docker.com/miusuario/mi-app:latest
+          docker push registry.hub.docker.com/miusuario/mi-app:latest
+
